@@ -194,6 +194,60 @@ class BCR_CLI_Commands {
     }
     
     /**
+     * Post a comment to a Basecamp card or todo
+     * 
+     * ## OPTIONS
+     * 
+     * <url>
+     * : The Basecamp card or todo URL to comment on
+     * 
+     * <comment>
+     * : The comment text to post
+     * 
+     * ## EXAMPLES
+     * 
+     *     # Post a comment to a card
+     *     wp bcr comment https://3.basecamp.com/123/buckets/456/card_tables/cards/789 "This issue has been fixed"
+     * 
+     * @when after_wp_load
+     */
+    public function comment($args, $assoc_args) {
+        $url = $args[0];
+        $comment_text = $args[1];
+        
+        // Validate URL
+        if (!$this->is_valid_basecamp_url($url)) {
+            WP_CLI::error('Invalid Basecamp URL provided.');
+            return;
+        }
+        
+        // Check authentication
+        $token_data = get_option('bcr_token_data', []);
+        if (empty($token_data['access_token'])) {
+            WP_CLI::error('Basecamp authentication not configured.');
+            return;
+        }
+        
+        // Parse URL
+        $url_parts = $this->parse_basecamp_url($url);
+        if (!$url_parts) {
+            WP_CLI::error('Could not parse Basecamp URL.');
+            return;
+        }
+        
+        WP_CLI::log('Posting comment to Basecamp...');
+        
+        // Post comment
+        $result = $this->post_comment($url_parts, $comment_text, $token_data);
+        
+        if ($result) {
+            WP_CLI::success('Comment posted successfully!');
+        } else {
+            WP_CLI::error('Failed to post comment. Check your permissions.');
+        }
+    }
+    
+    /**
      * List recent cards or search cards
      * 
      * ## OPTIONS
@@ -364,6 +418,37 @@ class BCR_CLI_Commands {
             'card' => $record, // Keep backward compatibility
             'comments' => $comments
         ];
+    }
+    
+    /**
+     * Helper: Post a comment to Basecamp
+     */
+    private function post_comment($url_parts, $comment_text, $token_data) {
+        $headers = [
+            'Authorization' => 'Bearer ' . $token_data['access_token'],
+            'User-Agent' => get_bloginfo('name') . ' (' . get_option('admin_email') . ')',
+            'Content-Type' => 'application/json',
+        ];
+        
+        // Build the comments API URL
+        $comments_url = "https://3.basecampapi.com/{$url_parts['account_id']}/buckets/{$url_parts['project_id']}/recordings/{$url_parts['recording_id']}/comments.json";
+        
+        $data = [
+            'content' => $comment_text
+        ];
+        
+        $response = wp_remote_post($comments_url, [
+            'headers' => $headers,
+            'body' => json_encode($data),
+            'method' => 'POST'
+        ]);
+        
+        if (is_wp_error($response)) {
+            return false;
+        }
+        
+        $response_code = wp_remote_retrieve_response_code($response);
+        return ($response_code === 201);
     }
     
     /**

@@ -1,10 +1,12 @@
 <?php
 /**
- * Plugin Name: Basecamp Cards Reader (Clean)
- * Description: Read Basecamp cards without image downloading
- * Version: 1.0.0
+ * Plugin Name: Basecamp Cards Reader
+ * Description: Read and manage Basecamp cards and todos directly from WordPress with OAuth 2.0 authentication
+ * Version: 1.1.0
  * Author: Wbcom Designs
  * Author URI: https://wbcomdesigns.com
+ * License: GPL v2 or later
+ * Text Domain: basecamp-cards-reader
  */
 
 if (!defined('ABSPATH')) {
@@ -15,12 +17,22 @@ class Basecamp_Cards_Reader_Clean {
     const OPT = 'bcr_settings';
     const TOKEN_OPT = 'bcr_token_data';
     
-    public function __construct() {
+    private static $instance = null;
+    
+    public static function get_instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+    
+    private function __construct() {
         add_action('init', [$this, 'init']);
         add_action('admin_menu', [$this, 'admin_menu']);
         add_action('rest_api_init', [$this, 'register_rest_routes']);
         add_action('admin_post_bcr_disconnect', [$this, 'handle_disconnect']);
         add_action('wp_ajax_bcr_read_card', [$this, 'handle_read_card']);
+        add_action('wp_ajax_bcr_post_comment', [$this, 'handle_post_comment']);
         
         // Load CLI commands
         $this->load_cli_commands();
@@ -63,6 +75,11 @@ class Basecamp_Cards_Reader_Clean {
     }
     
     public function handle_read_card() {
+        // Verify nonce
+        if (!isset($_POST['_wpnonce']) || !wp_verify_nonce($_POST['_wpnonce'], 'bcr_ajax_nonce')) {
+            wp_send_json_error('Security check failed');
+        }
+        
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Unauthorized');
         }
@@ -258,7 +275,7 @@ class Basecamp_Cards_Reader_Clean {
         // Handle OAuth callback
         if (!empty($_GET['code']) && !empty($_GET['state'])) {
             $this->handle_oauth_callback($_GET['code']);
-            wp_redirect(admin_url('admin.php?page=basecamp-reader'));
+            wp_redirect(admin_url('options-general.php?page=basecamp-reader'));
             exit;
         }
         
@@ -290,7 +307,7 @@ class Basecamp_Cards_Reader_Clean {
                 <ol>
                     <li>Go to <a href="https://launchpad.37signals.com/integrations" target="_blank">Basecamp Integrations</a></li>
                     <li>Register a new app with these settings:</li>
-                    <li><strong>Redirect URI:</strong> <code><?php echo admin_url('admin.php?page=basecamp-reader'); ?></code></li>
+                    <li><strong>Redirect URI:</strong> <code><?php echo admin_url('options-general.php?page=basecamp-reader'); ?></code></li>
                 </ol>
             </div>
             
@@ -335,18 +352,43 @@ class Basecamp_Cards_Reader_Clean {
             
             <?php if ($is_connected && !$is_expired): ?>
             <div class="card">
-                <h2>Test Card Reader</h2>
+                <h2>Read Card/Todo</h2>
                 <form id="test-form">
                     <p>
-                        <label for="card-url">Basecamp Card URL:</label><br>
+                        <label for="card-url">Basecamp Card/Todo URL:</label><br>
                         <input type="url" id="card-url" placeholder="https://3.basecamp.com/..." style="width: 400px;" value="https://3.basecamp.com/5798509/buckets/37557560/card_tables/cards/9010883489">
-                        <button type="submit">Read Card</button>
+                        <button type="submit" class="button button-primary">Read Card</button>
                     </p>
                 </form>
                 <div id="result" style="margin-top: 20px;"></div>
             </div>
             
+            <div class="card">
+                <h2>Post Comment</h2>
+                <form id="comment-form">
+                    <p>
+                        <label for="comment-url">Basecamp Card/Todo URL:</label><br>
+                        <input type="url" id="comment-url" placeholder="https://3.basecamp.com/..." style="width: 400px;" value="https://3.basecamp.com/5798509/buckets/37557560/card_tables/cards/9010883489">
+                    </p>
+                    <p>
+                        <label for="comment-text">Comment:</label><br>
+                        <textarea id="comment-text" rows="5" style="width: 400px;" placeholder="Enter your comment here..."></textarea>
+                    </p>
+                    <p>
+                        <label>
+                            <input type="checkbox" id="use-html"> Use HTML formatting
+                        </label>
+                    </p>
+                    <p>
+                        <button type="submit" class="button button-primary">Post Comment</button>
+                    </p>
+                </form>
+                <div id="comment-result" style="margin-top: 20px;"></div>
+            </div>
+            
             <script>
+            const bcr_nonce = '<?php echo wp_create_nonce('bcr_ajax_nonce'); ?>';
+            
             document.getElementById('test-form').addEventListener('submit', function(e) {
                 e.preventDefault();
                 
@@ -363,7 +405,7 @@ class Basecamp_Cards_Reader_Clean {
                 fetch(ajaxurl, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: 'action=bcr_read_card&url=' + encodeURIComponent(url)
+                    body: 'action=bcr_read_card&url=' + encodeURIComponent(url) + '&_wpnonce=' + bcr_nonce
                 })
                 .then(response => response.json())
                 .then(data => {
@@ -433,6 +475,45 @@ class Basecamp_Cards_Reader_Clean {
                     }
                 });
             });
+            
+            // Comment posting functionality
+            document.getElementById('comment-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const url = document.getElementById('comment-url').value;
+                const comment = document.getElementById('comment-text').value;
+                const useHtml = document.getElementById('use-html').checked;
+                const resultDiv = document.getElementById('comment-result');
+                
+                if (!url || !comment) {
+                    resultDiv.innerHTML = '<p style="color: red;">Please enter both URL and comment</p>';
+                    return;
+                }
+                
+                resultDiv.innerHTML = '<p>Posting comment...</p>';
+                
+                fetch(ajaxurl, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'action=bcr_post_comment&url=' + encodeURIComponent(url) + 
+                          '&comment=' + encodeURIComponent(comment) +
+                          '&use_html=' + (useHtml ? '1' : '0') +
+                          '&_wpnonce=' + bcr_nonce
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        resultDiv.innerHTML = '<div class="notice notice-success" style="padding: 10px;"><p>✅ Comment posted successfully!</p></div>';
+                        document.getElementById('comment-text').value = '';
+                    } else {
+                        resultDiv.innerHTML = '<div class="notice notice-error" style="padding: 10px;"><p>❌ Error: ' + (data.data || 'Failed to post comment') + '</p></div>';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    resultDiv.innerHTML = '<div class="notice notice-error" style="padding: 10px;"><p>❌ Error posting comment</p></div>';
+                });
+            });
             </script>
             <?php endif; ?>
         </div>
@@ -444,7 +525,7 @@ class Basecamp_Cards_Reader_Clean {
         return 'https://launchpad.37signals.com/authorization/new?' . http_build_query([
             'type' => 'web_server',
             'client_id' => $opt['client_id'],
-            'redirect_uri' => admin_url('admin.php?page=basecamp-reader'),
+            'redirect_uri' => admin_url('options-general.php?page=basecamp-reader'),
         ]);
     }
     
@@ -456,7 +537,7 @@ class Basecamp_Cards_Reader_Clean {
                 'type' => 'web_server',
                 'client_id' => $opt['client_id'],
                 'client_secret' => $opt['client_secret'],
-                'redirect_uri' => admin_url('admin.php?page=basecamp-reader'),
+                'redirect_uri' => admin_url('options-general.php?page=basecamp-reader'),
                 'code' => $code,
             ],
         ]);
@@ -499,11 +580,93 @@ class Basecamp_Cards_Reader_Clean {
         
         return json_decode($output, true);
     }
+    
+    public function handle_post_comment() {
+        // Verify nonce
+        if (!isset($_POST['_wpnonce']) || !wp_verify_nonce($_POST['_wpnonce'], 'bcr_ajax_nonce')) {
+            wp_send_json_error('Security check failed');
+        }
+        
+        // Check user permissions
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Insufficient permissions');
+        }
+        
+        $url = sanitize_text_field($_POST['url'] ?? '');
+        $comment_text = wp_kses_post($_POST['comment'] ?? '');
+        $use_html = sanitize_text_field($_POST['use_html'] ?? '0');
+        
+        if (!$url || !$comment_text) {
+            wp_send_json_error('URL and comment are required');
+        }
+        
+        // Parse URL to get account, project, and card/todo ID
+        $pattern_card = '/basecamp\.com\/(\d+)\/buckets\/(\d+)\/card_tables\/cards\/(\d+)/';
+        $pattern_todo = '/basecamp\.com\/(\d+)\/buckets\/(\d+)\/todos\/(\d+)/';
+        
+        $account_id = '';
+        $project_id = '';
+        $recording_id = '';
+        
+        if (preg_match($pattern_card, $url, $matches)) {
+            $account_id = $matches[1];
+            $project_id = $matches[2];
+            $recording_id = $matches[3];
+        } elseif (preg_match($pattern_todo, $url, $matches)) {
+            $account_id = $matches[1];
+            $project_id = $matches[2];
+            $recording_id = $matches[3];
+        } else {
+            wp_send_json_error('Invalid Basecamp URL');
+        }
+        
+        // Get token
+        $token_data = get_option(self::TOKEN_OPT, []);
+        if (empty($token_data['access_token'])) {
+            wp_send_json_error('Not authenticated');
+        }
+        
+        // Build comment API URL
+        $comments_url = "https://3.basecampapi.com/{$account_id}/buckets/{$project_id}/recordings/{$recording_id}/comments.json";
+        
+        // Format comment based on HTML option
+        if ($use_html === '1') {
+            // Allow HTML formatting
+            $comment_content = $comment_text;
+        } else {
+            // Convert line breaks to <br> for plain text
+            $comment_content = nl2br(esc_html($comment_text));
+        }
+        
+        // Post comment
+        $response = wp_remote_post($comments_url, [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $token_data['access_token'],
+                'User-Agent' => get_bloginfo('name') . ' (' . get_option('admin_email') . ')',
+                'Content-Type' => 'application/json',
+            ],
+            'body' => json_encode(['content' => $comment_content]),
+            'timeout' => 30
+        ]);
+        
+        if (is_wp_error($response)) {
+            wp_send_json_error($response->get_error_message());
+        }
+        
+        $code = wp_remote_retrieve_response_code($response);
+        if ($code === 201) {
+            wp_send_json_success('Comment posted successfully');
+        } else {
+            $body = json_decode(wp_remote_retrieve_body($response), true);
+            $error_msg = $body['error'] ?? 'Failed to post comment';
+            wp_send_json_error($error_msg);
+        }
+    }
 }
 
 // Initialize the plugin
-new Basecamp_Cards_Reader_Clean();
+$bcr_instance = Basecamp_Cards_Reader_Clean::get_instance();
 
 // Activation/Deactivation hooks
-register_activation_hook(__FILE__, [new Basecamp_Cards_Reader_Clean(), 'activate']);
-register_deactivation_hook(__FILE__, [new Basecamp_Cards_Reader_Clean(), 'deactivate']);
+register_activation_hook(__FILE__, [$bcr_instance, 'activate']);
+register_deactivation_hook(__FILE__, [$bcr_instance, 'deactivate']);

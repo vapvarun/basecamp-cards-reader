@@ -1,4 +1,4 @@
-# Basecamp Cards Reader (Clean)
+# Basecamp Cards Reader
 
 A WordPress plugin that reads Basecamp cards and todos on-demand without local storage or image downloading.
 
@@ -11,6 +11,8 @@ The Basecamp Cards Reader plugin provides a clean, lightweight solution for read
 - **OAuth 2.0 Authentication** - Secure Basecamp API integration
 - **On-Demand Reading** - No local storage, fetches fresh data each time
 - **Cards & Todos Support** - Automatic type detection from URLs
+- **Comment Posting** - Post comments directly to cards/todos from WordPress
+- **Admin Interface** - User-friendly interface for reading and commenting
 - **WP-CLI Commands** - Full command-line interface
 - **Multiple Output Formats** - Table, JSON, CSV support
 - **Image Attachment Detection** - Identifies images without downloading
@@ -30,6 +32,20 @@ The Basecamp Cards Reader plugin provides a clean, lightweight solution for read
 2. Set redirect URI to: `http://yoursite.com/wp-admin/options-general.php?page=basecamp-reader`
 3. Enter Client ID and Client Secret in plugin settings
 4. Click "Authorize with Basecamp" to complete setup
+
+## Admin Interface Features
+
+### Reading Cards/Todos
+1. Navigate to Settings > Basecamp Reader
+2. Enter a Basecamp card or todo URL
+3. Click "Read Card" to fetch and display all details and comments
+
+### Posting Comments
+1. Navigate to Settings > Basecamp Reader
+2. Enter the card/todo URL where you want to post
+3. Type your comment in the text area
+4. Optional: Check "Use HTML formatting" for rich text
+5. Click "Post Comment" to submit
 
 ## WP-CLI Commands
 
@@ -70,6 +86,16 @@ wp bcr extract_feedback "https://3.basecamp.com/123/buckets/456/card_tables/card
 
 # Extract all feedback
 wp bcr extract_feedback "https://3.basecamp.com/123/buckets/456/card_tables/cards/789"
+```
+
+### Post Comments
+
+```bash
+# Post a comment to a card
+wp bcr comment "https://3.basecamp.com/123/buckets/456/card_tables/cards/789" "Your comment text here"
+
+# Post a comment to a todo
+wp bcr comment "https://3.basecamp.com/123/buckets/456/todos/789" "Task completed!"
 ```
 
 ## Output Formats
@@ -169,6 +195,12 @@ wp bcr auth --reset
 For support and feature requests, please visit [Wbcom Designs](https://wbcomdesigns.com).
 
 ## Changelog
+
+### 1.1.0
+- Added comment posting functionality
+- Enhanced admin interface with comment form
+- Added HTML formatting support for comments
+- Improved CLI with comment posting command
 
 ### 1.0.0
 - Initial release
