@@ -3,7 +3,8 @@
  * Plugin Name: Basecamp Cards Reader (Clean)
  * Description: Read Basecamp cards without image downloading
  * Version: 1.0.0
- * Author: Your Name
+ * Author: Wbcom Designs
+ * Author URI: https://wbcomdesigns.com
  */
 
 if (!defined('ABSPATH')) {
