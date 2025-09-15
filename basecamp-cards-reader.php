@@ -20,6 +20,15 @@ class Basecamp_Cards_Reader_Clean {
         add_action('rest_api_init', [$this, 'register_rest_routes']);
         add_action('admin_post_bcr_disconnect', [$this, 'handle_disconnect']);
         add_action('wp_ajax_bcr_read_card', [$this, 'handle_read_card']);
+        
+        // Load CLI commands
+        $this->load_cli_commands();
+    }
+    
+    private function load_cli_commands() {
+        if (defined('WP_CLI') && WP_CLI) {
+            require_once plugin_dir_path(__FILE__) . 'includes/class-bcr-cli-commands.php';
+        }
     }
     
     public function init() {
