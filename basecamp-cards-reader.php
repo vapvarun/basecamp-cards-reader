@@ -28,12 +28,13 @@ class Basecamp_Cards_Reader_Clean {
     
     private function __construct() {
         add_action('init', [$this, 'init']);
+        add_action('admin_init', [$this, 'handle_oauth_early']);
         add_action('admin_menu', [$this, 'admin_menu']);
         add_action('rest_api_init', [$this, 'register_rest_routes']);
         add_action('admin_post_bcr_disconnect', [$this, 'handle_disconnect']);
         add_action('wp_ajax_bcr_read_card', [$this, 'handle_read_card']);
         add_action('wp_ajax_bcr_post_comment', [$this, 'handle_post_comment']);
-        
+
         // Load CLI commands
         $this->load_cli_commands();
     }
@@ -46,6 +47,23 @@ class Basecamp_Cards_Reader_Clean {
     
     public function init() {
         // Plugin initialization
+    }
+
+    public function handle_oauth_early() {
+        // Only process on our admin page
+        if (!isset($_GET['page']) || $_GET['page'] !== 'basecamp-reader') {
+            return;
+        }
+
+        // Handle OAuth callback early before any output
+        if (!empty($_GET['code'])) {
+            $success = $this->handle_oauth_callback($_GET['code']);
+            if ($success) {
+                set_transient('bcr_oauth_success', 'Successfully connected to Basecamp!', 60);
+            }
+            wp_redirect(admin_url('options-general.php?page=basecamp-reader'));
+            exit;
+        }
     }
     
     public function activate() {
@@ -271,14 +289,7 @@ class Basecamp_Cards_Reader_Clean {
     public function admin_page() {
         $opt = get_option(self::OPT, []);
         $token_data = get_option(self::TOKEN_OPT, []);
-        
-        // Handle OAuth callback
-        if (!empty($_GET['code']) && !empty($_GET['state'])) {
-            $this->handle_oauth_callback($_GET['code']);
-            wp_redirect(admin_url('options-general.php?page=basecamp-reader'));
-            exit;
-        }
-        
+
         // Handle form submissions
         if (isset($_POST['save_settings'])) {
             check_admin_referer('bcr_save_settings');
@@ -300,6 +311,23 @@ class Basecamp_Cards_Reader_Clean {
         ?>
         <div class="wrap">
             <h1>Basecamp Cards Reader</h1>
+
+            <?php
+            // Display OAuth messages
+            if ($error = get_transient('bcr_oauth_error')):
+                delete_transient('bcr_oauth_error');
+            ?>
+                <div class="notice notice-error"><p><?php echo esc_html($error); ?></p></div>
+            <?php
+            endif;
+
+            if ($success = get_transient('bcr_oauth_success')):
+                delete_transient('bcr_oauth_success');
+            ?>
+                <div class="notice notice-success"><p><?php echo esc_html($success); ?></p></div>
+            <?php
+            endif;
+            ?>
             
             <div class="card">
                 <h2>OAuth 2.0 Setup</h2>
@@ -531,7 +559,11 @@ class Basecamp_Cards_Reader_Clean {
     
     private function handle_oauth_callback($code) {
         $opt = get_option(self::OPT, []);
-        
+
+        // Debug log
+        error_log('BCR OAuth Callback - Code received: ' . substr($code, 0, 10) . '...');
+        error_log('BCR OAuth Callback - Redirect URI: ' . admin_url('options-general.php?page=basecamp-reader'));
+
         $response = wp_remote_post('https://launchpad.37signals.com/authorization/token', [
             'body' => [
                 'type' => 'web_server',
@@ -541,19 +573,30 @@ class Basecamp_Cards_Reader_Clean {
                 'code' => $code,
             ],
         ]);
-        
-        if (!is_wp_error($response)) {
-            $body = json_decode(wp_remote_retrieve_body($response), true);
-            if (!empty($body['access_token'])) {
-                update_option(self::TOKEN_OPT, [
-                    'access_token' => $body['access_token'],
-                    'refresh_token' => $body['refresh_token'] ?? '',
-                    'expires_at' => time() + ($body['expires_in'] ?? 1209600),
-                ]);
-                return true;
-            }
+
+        if (is_wp_error($response)) {
+            error_log('BCR OAuth Error: ' . $response->get_error_message());
+            // Store error for display
+            set_transient('bcr_oauth_error', 'Connection error: ' . $response->get_error_message(), 60);
+            return false;
         }
-        
+
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+        error_log('BCR OAuth Response: ' . json_encode($body));
+
+        if (!empty($body['access_token'])) {
+            $result = update_option(self::TOKEN_OPT, [
+                'access_token' => $body['access_token'],
+                'refresh_token' => $body['refresh_token'] ?? '',
+                'expires_at' => time() + ($body['expires_in'] ?? 1209600),
+            ]);
+            error_log('BCR Token Save Result: ' . ($result ? 'SUCCESS' : 'FAILED'));
+            return true;
+        } elseif (!empty($body['error'])) {
+            error_log('BCR OAuth Error from API: ' . $body['error'] . ' - ' . ($body['error_description'] ?? ''));
+            set_transient('bcr_oauth_error', 'OAuth error: ' . $body['error'] . ' - ' . ($body['error_description'] ?? ''), 60);
+        }
+
         return false;
     }
     
