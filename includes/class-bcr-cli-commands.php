@@ -88,6 +88,8 @@ class BCR_CLI_Commands {
         // Prepare output data
         $output_data = [
             'title' => $card_data['card']['title'] ?? 'Unknown',
+            'content' => strip_tags($card_data['card']['content'] ?? ''),
+            'notes' => strip_tags($card_data['card']['notes'] ?? ''),
             'updated_at' => $card_data['card']['updated_at'] ?? '',
             'created_at' => $card_data['card']['created_at'] ?? '',
             'creator' => $card_data['card']['creator']['name'] ?? 'Unknown',
@@ -193,6 +195,103 @@ class BCR_CLI_Commands {
         WP_CLI::log('Configure authentication via: wp-admin/options-general.php?page=basecamp-reader');
     }
     
+    /**
+     * Read notes/content from a Basecamp card or todo
+     *
+     * ## OPTIONS
+     *
+     * <url>
+     * : The Basecamp card or todo URL to read notes from
+     *
+     * [--format=<format>]
+     * : Output format (text, json)
+     * ---
+     * default: text
+     * options:
+     *   - text
+     *   - json
+     * ---
+     *
+     * ## EXAMPLES
+     *
+     *     # Read card notes in text format
+     *     wp bcr notes https://3.basecamp.com/5798509/buckets/37557560/card_tables/cards/9010883489
+     *
+     *     # Read todo notes in JSON format
+     *     wp bcr notes https://3.basecamp.com/5798509/buckets/37557560/todos/9010883489 --format=json
+     *
+     * @when after_wp_load
+     */
+    public function notes($args, $assoc_args) {
+        $url = $args[0];
+        $format = $assoc_args['format'] ?? 'text';
+
+        // Validate URL
+        if (!$this->is_valid_basecamp_url($url)) {
+            WP_CLI::error('Invalid Basecamp URL provided.');
+            return;
+        }
+
+        // Check if plugin is configured
+        $token_data = get_option('bcr_token_data', []);
+        if (empty($token_data['access_token'])) {
+            WP_CLI::error('Basecamp authentication not configured. Please set up the plugin first.');
+            return;
+        }
+
+        // Parse the URL
+        $url_parts = $this->parse_basecamp_url($url);
+        if (!$url_parts) {
+            WP_CLI::error('Could not parse Basecamp URL.');
+            return;
+        }
+
+        WP_CLI::log("Reading notes from Basecamp {$url_parts['type']}...");
+
+        // Fetch data
+        $card_data = $this->fetch_card_data($url_parts, $token_data);
+        if (!$card_data) {
+            WP_CLI::error("Failed to fetch {$url_parts['type']} data. Check your authentication.");
+            return;
+        }
+
+        $card = $card_data['card'];
+        $title = $card['title'] ?? 'Unknown';
+        $content = $card['content'] ?? '';
+        $notes = $card['notes'] ?? '';
+
+        if ($format === 'json') {
+            $output = [
+                'title' => $title,
+                'content' => strip_tags($content),
+                'notes' => strip_tags($notes)
+            ];
+            WP_CLI::log(json_encode($output, JSON_PRETTY_PRINT));
+        } else {
+            WP_CLI::log("=== {$title} ===\n");
+
+            if (!empty($content)) {
+                WP_CLI::log("CONTENT:");
+                WP_CLI::log(str_repeat('-', 50));
+                WP_CLI::log(wordwrap(strip_tags($content), 80));
+                WP_CLI::log("");
+            }
+
+            if (!empty($notes)) {
+                WP_CLI::log("NOTES:");
+                WP_CLI::log(str_repeat('-', 50));
+                WP_CLI::log(wordwrap(strip_tags($notes), 80));
+                WP_CLI::log("");
+            }
+
+            if (empty($content) && empty($notes)) {
+                WP_CLI::log("No content or notes found for this {$url_parts['type']}.");
+            }
+        }
+
+        WP_CLI::success('Notes reading complete!');
+    }
+
     /**
      * Post a comment to a Basecamp card or todo
      * 
@@ -318,6 +417,24 @@ class BCR_CLI_Commands {
         WP_CLI::log("Card: {$card_data['card']['title']}");
         WP_CLI::log("Comments: " . count($card_data['comments']));
         WP_CLI::log(str_repeat('=', 50));
+
+        // Show card content/notes if available
+        $card_content = strip_tags($card_data['card']['content'] ?? '');
+        $card_notes = strip_tags($card_data['card']['notes'] ?? '');
+
+        if (!empty($card_content)) {
+            WP_CLI::log("\nCard Content:");
+            WP_CLI::log(str_repeat('-', 40));
+            WP_CLI::log(wordwrap($card_content, 80));
+            WP_CLI::log("");
+        }
+
+        if (!empty($card_notes)) {
+            WP_CLI::log("\nCard Notes:");
+            WP_CLI::log(str_repeat('-', 40));
+            WP_CLI::log(wordwrap($card_notes, 80));
+            WP_CLI::log("");
+        }
         
         foreach ($card_data['comments'] as $idx => $comment) {
             $comment_num = $idx + 1;

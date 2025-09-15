@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Basecamp Cards Reader
- * Description: Read and manage Basecamp cards and todos directly from WordPress with OAuth 2.0 authentication
- * Version: 1.1.0
+ * Description: Read and manage Basecamp cards and todos directly from WordPress with OAuth 2.0 authentication. Enhanced with notes/content reading support.
+ * Version: 1.2.0
  * Author: Wbcom Designs
  * Author URI: https://wbcomdesigns.com
  * License: GPL v2 or later
