@@ -22,10 +22,17 @@ class BCR_CLI_Commands_Extended {
     private $api;
 
     /**
+     * Quiet mode - suppress all non-essential output
+     */
+    private $quiet = false;
+
+    /**
      * Constructor
      */
     public function __construct() {
         $this->init_api();
+        // Enable quiet mode by default for professional output
+        $this->quiet = true;
     }
 
     /**
@@ -37,6 +44,31 @@ class BCR_CLI_Commands_Extended {
             $this->api = new Basecamp_API($token_data['access_token']);
             // Auto-detect account ID
             $this->api->get_account_id();
+        }
+    }
+
+    /**
+     * Helper method for output (respects quiet mode)
+     */
+    private function output($message, $type = 'line') {
+        if ($this->quiet && $type !== 'error') {
+            return;
+        }
+
+        switch ($type) {
+            case 'success':
+                WP_CLI::success($message);
+                break;
+            case 'warning':
+                WP_CLI::warning($message);
+                break;
+            case 'error':
+                WP_CLI::error($message);
+                break;
+            case 'line':
+            default:
+                WP_CLI::line($message);
+                break;
         }
     }
 
@@ -984,12 +1016,15 @@ class BCR_CLI_Commands_Extended {
      * =========================== */
 
     /**
-     * Get all cards from a project with complete summary
+     * Get all cards from a SPECIFIC PROJECT with complete summary
+     *
+     * This command analyzes cards in a single project only.
+     * For portfolio-wide analysis, use 'wp bcr overview'.
      *
      * ## OPTIONS
      *
      * <project_id>
-     * : The project ID
+     * : The project ID (required - this is project-specific)
      *
      * [--table=<table_id>]
      * : Card table ID (will auto-detect if not provided)
@@ -1005,15 +1040,16 @@ class BCR_CLI_Commands_Extended {
      *
      * ## EXAMPLES
      *
-     *     # Get summary of all cards in Check-ins Pro project
+     *     # Get card summary for a specific project
      *     wp bcr project-cards 37594969
      *
-     *     # Get full details
+     *     # Get full card details for a project
      *     wp bcr project-cards 37594969 --format=full
      *
-     *     # Export to JSON
+     *     # Export project cards to JSON
      *     wp bcr project-cards 37594969 --format=json --export=cards.json
      *
+     * @subcommand project-cards
      * @when after_wp_load
      */
     public function project_cards($args, $assoc_args) {
@@ -1132,159 +1168,123 @@ class BCR_CLI_Commands_Extended {
     }
 
     /**
-     * Create a new card in a project
+     * List columns in a project (simple version - just needs project ID)
      *
      * ## OPTIONS
      *
      * <project_id>
-     * : The project ID
+     * : The project ID or name
      *
-     * <column_id>
-     * : The column ID to add card to
+     * [--format=<format>]
+     * : Output format (table, json, csv)
      *
-     * <title>
-     * : Card title
+     * [--no-cache]
+     * : Bypass cache and fetch fresh data from API
      *
-     * [--content=<content>]
-     * : Card description/content
-     *
-     * [--due=<date>]
-     * : Due date (YYYY-MM-DD)
-     *
-     * [--assign=<user_ids>]
-     * : Comma-separated user IDs to assign
+     * [--fresh]
+     * : Alias for --no-cache
      *
      * ## EXAMPLES
      *
-     *     # Create a card in Check-ins Pro
-     *     wp bcr create-card 37594969 7416024714 "Fix map display issue" --content="User reported map not showing"
+     *     wp bcr columns 37594834
+     *     wp bcr columns "BuddyPress Business Profile"
+     *     wp bcr columns 37594834 --format=json
+     *     wp bcr columns 37594834 --no-cache
+     *     wp bcr columns 37594834 --fresh
      *
-     *     # Create with due date and assignee
-     *     wp bcr create-card 37594969 7416024714 "New feature" --due=2024-12-31 --assign=123456
-     *
+     * @subcommand columns
      * @when after_wp_load
      */
-    public function create_card($args, $assoc_args) {
+    public function columns($args, $assoc_args) {
         if (!$this->check_auth()) return;
 
-        $project_id = $args[0] ?? null;
-        $column_id = $args[1] ?? null;
-        $title = $args[2] ?? null;
-
-        if (!$project_id || !$column_id || !$title) {
-            WP_CLI::error('Project ID, column ID, and title are required');
+        $project_identifier = $args[0] ?? null;
+        if (!$project_identifier) {
+            WP_CLI::error('Project ID or name is required');
             return;
         }
 
-        $content = $assoc_args['content'] ?? '';
-        $due_on = $assoc_args['due'] ?? null;
-        $assignee_ids = !empty($assoc_args['assign']) ?
-            array_map('intval', explode(',', $assoc_args['assign'])) : [];
+        $format = $assoc_args['format'] ?? 'table';
 
-        // Auto-detect account ID
-        $this->api->get_account_id();
+        // Check for cache bypass in various forms (WP-CLI parameter parsing can be tricky)
+        $no_cache = isset($assoc_args['no-cache']) ||
+                   isset($assoc_args['fresh']) ||
+                   isset($assoc_args['nocache']) ||
+                   in_array('--no-cache', $args) ||
+                   in_array('--fresh', $args);
 
-        WP_CLI::log("Creating card: $title");
+        // Resolve project
+        $automation = new Basecamp_Automation();
 
-        $response = $this->api->create_card($project_id, $column_id, $title, $content, $due_on, $assignee_ids);
-
-        if (!empty($response['error']) || $response['code'] !== 201) {
-            WP_CLI::error('Failed to create card: ' . ($response['message'] ?? 'Unknown error'));
-            return;
+        // Set cache bypass mode if requested
+        if ($no_cache) {
+            Basecamp_Automation::$bypass_cache = true;
+            $automation->clear_cache();
+            WP_CLI::line("🔄 Bypassing cache - fetching fresh data...");
         }
 
-        $card = $response['data'];
-        WP_CLI::success("Card created successfully!");
-        WP_CLI::log("Card ID: " . $card['id']);
-        WP_CLI::log("URL: " . $card['app_url']);
-    }
+        $project_id = $automation->resolve_project($project_identifier);
 
-    /**
-     * List all columns in a project
-     *
-     * ## OPTIONS
-     *
-     * <project_id>
-     * : The project ID
-     *
-     * ## EXAMPLES
-     *
-     *     wp bcr list-columns 37594969
-     *
-     * @when after_wp_load
-     */
-    public function list_columns($args, $assoc_args) {
-        if (!$this->check_auth()) return;
-
-        $project_id = $args[0] ?? null;
         if (!$project_id) {
-            WP_CLI::error('Project ID is required');
+            WP_CLI::error("Project not found: {$project_identifier}");
             return;
         }
 
-        // Auto-detect account ID
-        $this->api->get_account_id();
+        $project = $automation->get_project($project_id);
+        WP_CLI::line("📁 Project: {$project['name']}");
+        WP_CLI::line("🆔 ID: {$project_id}");
+        WP_CLI::line('');
 
-        // Get project details
-        $project_response = $this->api->get_project($project_id);
-        if (!empty($project_response['error'])) {
-            WP_CLI::error('Failed to fetch project');
-            return;
-        }
-
-        $project = $project_response['data'];
-
-        // Find card table
-        $card_table_id = null;
-        foreach ($project['dock'] as $tool) {
-            if ($tool['name'] === 'card_table' || $tool['name'] === 'kanban_board') {
-                $card_table_id = $tool['id'];
-                break;
-            }
-        }
-
-        if (!$card_table_id) {
-            WP_CLI::error('No card table found in this project');
-            return;
-        }
-
-        // Scan for columns
-        $columns = [];
-        $base_id = intval($card_table_id);
-
-        for ($id = $base_id + 10; $id <= $base_id + 30; $id++) {
-            $response = $this->api->get("/{$this->api->account_id}/buckets/{$project_id}/card_tables/lists/{$id}.json");
-            if ($response['code'] === 200) {
-                $columns[$id] = $response['data'];
-            }
-        }
+        // Discover columns
+        WP_CLI::log("Discovering columns...");
+        $columns = $automation->discover_columns($project_id);
 
         if (empty($columns)) {
-            WP_CLI::warning('No columns found in card table');
+            WP_CLI::warning('No columns found in this project');
             return;
         }
 
-        // Sort and display
-        uasort($columns, function($a, $b) { return $a['position'] - $b['position']; });
+        // Sort by position
+        uasort($columns, function($a, $b) {
+            return ($a['position'] ?? 999) - ($b['position'] ?? 999);
+        });
 
         $output = [];
-        foreach ($columns as $id => $col) {
+        foreach ($columns as $col_id => $column) {
             // Get card count
-            $cards_response = $this->api->get("/{$this->api->account_id}/buckets/{$project_id}/card_tables/lists/{$id}/cards.json");
+            $account_id = get_option('basecamp_account_id', '');
+            if (!$account_id) {
+                $account_id = $this->api->get_account_id();
+            }
+
+            $cards_response = $this->api->get("/{$account_id}/buckets/{$project_id}/card_tables/lists/{$col_id}/cards.json");
             $card_count = 0;
             if ($cards_response['code'] === 200) {
                 $card_count = count($cards_response['data'] ?? []);
             }
 
+            $column_type = $this->get_column_type($column['title']);
+            $emoji = $this->get_column_emoji($column_type);
+
             $output[] = [
-                'ID' => $id,
-                'Title' => $col['title'],
-                'Position' => $col['position'],
-                'Cards' => $card_count
+                'ID' => $col_id,
+                'Name' => $column['title'],
+                'Type' => $emoji . ' ' . $column_type,
+                'Cards' => $card_count,
+                'Position' => $column['position'] ?? 999
             ];
         }
 
-        WP_CLI\Utils\format_items('table', $output, ['ID', 'Title', 'Position', 'Cards']);
+        if ($format === 'json') {
+            WP_CLI::line(json_encode($columns, JSON_PRETTY_PRINT));
+        } elseif ($format === 'csv') {
+            WP_CLI\Utils\format_items('csv', $output, ['ID', 'Name', 'Type', 'Cards', 'Position']);
+        } else {
+            WP_CLI\Utils\format_items('table', $output, ['ID', 'Name', 'Type', 'Cards', 'Position']);
+        }
+
+        WP_CLI::line('');
+        WP_CLI::success("Found " . count($columns) . " columns");
     }
 
     /**
@@ -2250,40 +2250,68 @@ class BCR_CLI_Commands_Extended {
     }
 
     /**
-     * Portfolio overview of all projects
+     * Lightweight portfolio overview (project list only)
+     *
+     * Shows a quick list of all projects without detailed scanning.
+     * For detailed analysis of a specific project, use 'wp bcr status <project_id>'
      *
      * ## OPTIONS
      *
      * [--status=<status>]
-     * : Filter by project status (active, archived)
+     * : Filter by project status (active, archived, all)
      *
-     * [--detailed]
-     * : Show detailed project information
+     * [--format=<format>]
+     * : Output format (table, json, csv)
      *
-     * [--health-only]
-     * : Show only projects with health issues
+     * [--analyze]
+     * : Perform deep analysis (WARNING: Slow with 100+ projects)
      *
      * ## EXAMPLES
      *
+     *     # Quick list of all active projects
      *     wp bcr overview
-     *     wp bcr overview --detailed
-     *     wp bcr overview --health-only
      *
+     *     # List archived projects
+     *     wp bcr overview --status=archived
+     *
+     *     # Export project list to JSON
+     *     wp bcr overview --format=json
+     *
+     *     # Deep analysis (use with caution)
+     *     wp bcr overview --analyze
+     *
+     * @subcommand overview
      * @when after_wp_load
      */
     public function overview($args, $assoc_args) {
         $status_filter = $assoc_args['status'] ?? 'active';
-        $detailed = isset($assoc_args['detailed']);
-        $health_only = isset($assoc_args['health-only']);
+        $format = $assoc_args['format'] ?? 'table';
+        $deep_analyze = isset($assoc_args['analyze']);
 
         WP_CLI::line('');
         WP_CLI::line('=== BASECAMP PORTFOLIO OVERVIEW ===');
         WP_CLI::line('');
 
-        $pro = new Basecamp_Pro();
-        $automation = new Basecamp_Automation();
+        // Use index for quick access
+        $indexer = new Basecamp_Indexer();
+        $index_stats = $indexer->get_statistics();
 
-        // Get all projects
+        if (empty($index_stats)) {
+            WP_CLI::warning('Index not found. Building index...');
+            WP_CLI::run_command(['bcr', 'index', 'build']);
+            $index_stats = $indexer->get_statistics();
+        }
+
+        // Quick stats from index
+        WP_CLI::line("📊 Portfolio Statistics:");
+        WP_CLI::line("   Total Projects: " . ($index_stats['projects']['count'] ?? 0));
+        WP_CLI::line("   Active Projects: " . ($index_stats['projects']['active'] ?? 0));
+        WP_CLI::line("   Total People: " . ($index_stats['people']['count'] ?? 0));
+        WP_CLI::line("   Index Updated: " . ($index_stats['last_updated'] ?? 'Never'));
+        WP_CLI::line('');
+
+        // Get project list
+        $pro = new Basecamp_Pro();
         $projects = $pro->fetch_all_projects();
         if ($status_filter !== 'all') {
             $projects = array_filter($projects, function($p) use ($status_filter) {
@@ -2291,120 +2319,127 @@ class BCR_CLI_Commands_Extended {
             });
         }
 
-        WP_CLI::line("📊 Analyzing " . count($projects) . " {$status_filter} projects...");
+        // Sort by name
+        usort($projects, function($a, $b) {
+            return strcasecmp($a['name'], $b['name']);
+        });
+
+        // Display project list (lightweight by default)
+        if (!$deep_analyze) {
+            $output = [];
+            foreach ($projects as $project) {
+                $status_emoji = match($project['status'] ?? 'active') {
+                    'active' => '🟢',
+                    'archived' => '📦',
+                    'trashed' => '🗑️',
+                    default => '⚪'
+                };
+
+                $output[] = [
+                    'ID' => $project['id'],
+                    'Name' => $project['name'],
+                    'Status' => $status_emoji . ' ' . ($project['status'] ?? 'active'),
+                    'Created' => date('Y-m-d', strtotime($project['created_at'])),
+                    'Updated' => date('Y-m-d', strtotime($project['updated_at']))
+                ];
+            }
+
+            if ($format === 'json') {
+                WP_CLI::line(json_encode($projects, JSON_PRETTY_PRINT));
+            } elseif ($format === 'csv') {
+                WP_CLI\Utils\format_items('csv', $output, ['ID', 'Name', 'Status', 'Created', 'Updated']);
+            } else {
+                WP_CLI\Utils\format_items('table', $output, ['ID', 'Name', 'Status', 'Created', 'Updated']);
+            }
+
+            WP_CLI::line('');
+            WP_CLI::success("💡 To analyze a specific project, use: wp bcr status <project_id>");
+            WP_CLI::line("💡 For deep portfolio analysis, use: wp bcr overview --analyze (WARNING: Slow)");
+            return;
+        }
+
+        // Deep analysis mode (with --analyze flag)
+        WP_CLI::warning('⚠️ Running deep analysis - this will take a while with 100+ projects...');
         WP_CLI::line('');
 
-        $portfolio_stats = [
-            'total_projects' => count($projects),
-            'total_cards' => 0,
-            'total_overdue' => 0,
-            'healthy_projects' => 0,
-            'warning_projects' => 0,
-            'critical_projects' => 0
-        ];
+        $automation = new Basecamp_Automation();
+        $analyzed_count = 0;
+        $max_analyze = 10; // Limit to prevent timeout
 
         foreach ($projects as $project) {
-            $analysis = $automation->analyze_project($project['id']);
-            $health_score = $analysis['health_score'] ?? 0;
-
-            $portfolio_stats['total_cards'] += $analysis['total_cards'] ?? 0;
-            $portfolio_stats['total_overdue'] += count($analysis['overdue'] ?? []);
-
-            if ($health_score >= 80) {
-                $portfolio_stats['healthy_projects']++;
-            } elseif ($health_score >= 60) {
-                $portfolio_stats['warning_projects']++;
-            } else {
-                $portfolio_stats['critical_projects']++;
+            if ($analyzed_count >= $max_analyze) {
+                WP_CLI::line('');
+                WP_CLI::warning("Analysis limited to {$max_analyze} projects. Analyze individual projects with: wp bcr status <project_id>");
+                break;
             }
 
-            // Show project details
-            if ($health_only && $health_score >= 70) {
-                continue; // Skip healthy projects in health-only mode
-            }
+            WP_CLI::line("Analyzing: {$project['name']}...");
 
-            $health_emoji = $health_score >= 80 ? '💚' : ($health_score >= 60 ? '💛' : '🔴');
-            $status_emoji = match($project['status'] ?? 'active') {
-                'active' => '🟢',
-                'archived' => '📦',
-                'trashed' => '🗑️',
-                default => '⚪'
-            };
+            // Quick column discovery only
+            $columns = $automation->discover_columns($project['id']);
+            $bug_count = 0;
+            $total_cards = 0;
 
-            WP_CLI::line("{$health_emoji} {$status_emoji} {$project['name']}");
-            WP_CLI::line("   Health: {$health_score}/100 | Cards: {$analysis['total_cards']} | Overdue: " . count($analysis['overdue'] ?? []));
+            foreach ($columns as $col_id => $column) {
+                $column_type = $this->get_column_type($column['title']);
 
-            if ($detailed) {
-                WP_CLI::line("   ID: {$project['id']} | Completion: " . ($analysis['completion_rate'] ?? 0) . "%");
-                if (!empty($analysis['unassigned'])) {
-                    WP_CLI::line("   ⚠️ Unassigned: " . count($analysis['unassigned']));
+                if ($column_type === 'bugs') {
+                    // Count bugs in this column
+                    $account_id = get_option('basecamp_account_id', '');
+                    if (!$account_id) {
+                        $account_id = $this->api->get_account_id();
+                    }
+                    $cards_response = $this->api->get("/{$account_id}/buckets/{$project['id']}/card_tables/lists/{$col_id}/cards.json");
+                    $cards = ($cards_response['code'] === 200) ? $cards_response['data'] : [];
+                    $bug_count += count($cards);
+                    $total_cards += count($cards);
                 }
             }
 
-            if ($health_score < 70) {
-                $issues = [];
-                if (count($analysis['overdue'] ?? []) > 0) {
-                    $issues[] = count($analysis['overdue']) . " overdue";
-                }
-                if (count($analysis['unassigned'] ?? []) > 3) {
-                    $issues[] = count($analysis['unassigned']) . " unassigned";
-                }
-                if (!empty($issues)) {
-                    WP_CLI::line("   🚨 Issues: " . implode(', ', $issues));
-                }
+            if ($bug_count > 0) {
+                $urgency = $bug_count > 10 ? '🚨' : ($bug_count > 5 ? '⚠️' : '💡');
+                WP_CLI::line("   {$urgency} Bugs: {$bug_count}");
             }
 
-            WP_CLI::line('');
+            $analyzed_count++;
         }
 
-        // Portfolio summary
-        WP_CLI::line('=== PORTFOLIO SUMMARY ===');
-        WP_CLI::line("📁 Total Projects: {$portfolio_stats['total_projects']}");
-        WP_CLI::line("📋 Total Cards: {$portfolio_stats['total_cards']}");
-        WP_CLI::line("⏰ Total Overdue: {$portfolio_stats['total_overdue']}");
         WP_CLI::line('');
-        WP_CLI::line('🏥 PROJECT HEALTH');
-        WP_CLI::line("💚 Healthy (80-100): {$portfolio_stats['healthy_projects']}");
-        WP_CLI::line("💛 Warning (60-79): {$portfolio_stats['warning_projects']}");
-        WP_CLI::line("🔴 Critical (<60): {$portfolio_stats['critical_projects']}");
-
-        // Health recommendations
-        if ($portfolio_stats['critical_projects'] > 0 || $portfolio_stats['total_overdue'] > 10) {
-            WP_CLI::line('');
-            WP_CLI::warning('Recommendations:');
-            if ($portfolio_stats['critical_projects'] > 0) {
-                WP_CLI::line('  • Run automation on critical projects: wp bcr automate [project] --all');
-            }
-            if ($portfolio_stats['total_overdue'] > 10) {
-                WP_CLI::line('  • Escalate overdue tasks: wp bcr automate [project] --escalate-overdue');
-            }
-        }
+        WP_CLI::success("Analysis complete. For detailed project analysis use: wp bcr status <project_id>");
     }
 
     /**
-     * Analyze project status by columns/lists with card classification
+     * Analyze status of a SPECIFIC PROJECT by columns (project-specific)
+     *
+     * This command analyzes a single project only.
+     * For portfolio-wide analysis, use 'wp bcr overview'
      *
      * ## OPTIONS
      *
      * <project>
-     * : Project name or ID to analyze
+     * : Project name or ID to analyze (required - this is project-specific)
      *
      * [--detailed]
-     * : Show detailed card information in each column
+     * : Show detailed card information for this project
      *
      * [--bugs-only]
-     * : Show only bug-related columns and counts
+     * : Show only bug-related columns for this project
      *
      * [--summary]
-     * : Show summary of card distribution by status
+     * : Show card distribution summary for this project
      *
      * ## EXAMPLES
      *
+     *     # Analyze specific project by name
      *     wp bcr status "checkins pro"
-     *     wp bcr status "buddyx" --detailed
-     *     wp bcr status 37594969 --bugs-only
-     *     wp bcr status "roadmap" --summary
      *
+     *     # Analyze specific project with details
+     *     wp bcr status 37594969 --detailed
+     *
+     *     # Show only bugs in a specific project
+     *     wp bcr status 37594969 --bugs-only
+     *
+     * @subcommand status
      * @when after_wp_load
      */
     public function status($args, $assoc_args) {
@@ -2474,8 +2509,13 @@ class BCR_CLI_Commands_Extended {
                 continue;
             }
 
-            // Get cards for this column
-            $cards = $automation->api_request("/{$automation->config['account_id']}/buckets/{$project_id}/card_tables/lists/{$col_id}/cards.json");
+            // Get cards for this column using proper API
+            $account_id = get_option('basecamp_account_id', '');
+            if (!$account_id) {
+                $account_id = $this->api->get_account_id();
+            }
+            $cards_response = $this->api->get("/{$account_id}/buckets/{$project_id}/card_tables/lists/{$col_id}/cards.json");
+            $cards = ($cards_response['code'] === 200) ? $cards_response['data'] : [];
             $card_count = is_array($cards) ? count($cards) : 0;
             $total_cards += $card_count;
 
@@ -2629,33 +2669,124 @@ class BCR_CLI_Commands_Extended {
     }
 
     /**
-     * Quick bug count across all projects
+     * Bug count for a specific project (project-specific by default)
      *
      * ## OPTIONS
      *
+     * <project>
+     * : Project ID or name (required unless using --all)
+     *
+     * [--all]
+     * : Scan ALL projects (portfolio-wide) - WARNING: This can be slow with 100+ projects
+     *
      * [--threshold=<number>]
-     * : Only show projects with more than this number of bugs (default: 0)
+     * : With --all, only show projects with bugs >= threshold (default: 0)
      *
      * [--detailed]
-     * : Show bug details for each project
+     * : Show detailed bug information
      *
      * ## EXAMPLES
      *
-     *     wp bcr bugs
-     *     wp bcr bugs --threshold=5
-     *     wp bcr bugs --detailed
+     *     # Show bugs in a specific project
+     *     wp bcr bugs "BuddyPress Business Profile"
+     *     wp bcr bugs 37594834
      *
+     *     # Show bugs in specific project with details
+     *     wp bcr bugs 37594834 --detailed
+     *
+     *     # Scan ALL projects (use with caution)
+     *     wp bcr bugs --all
+     *     wp bcr bugs --all --threshold=5
+     *
+     * @subcommand bugs
      * @when after_wp_load
      */
     public function bugs($args, $assoc_args) {
+        $all_projects = isset($assoc_args['all']);
         $threshold = intval($assoc_args['threshold'] ?? 0);
         $detailed = isset($assoc_args['detailed']);
 
-        WP_CLI::line('🐛 Scanning all projects for bugs...');
+        $automation = new Basecamp_Automation();
+
+        // Single project mode (default)
+        if (!$all_projects) {
+            $project_identifier = $args[0] ?? null;
+            if (!$project_identifier) {
+                WP_CLI::error('Project ID or name is required (or use --all for portfolio scan)');
+                return;
+            }
+
+            // Resolve project
+            $project_id = $automation->resolve_project($project_identifier);
+            if (!$project_id) {
+                WP_CLI::error("Project not found: {$project_identifier}");
+                return;
+            }
+
+            $project = $automation->get_project($project_id);
+            WP_CLI::line("🐛 Checking bugs in: {$project['name']}");
+            WP_CLI::line('');
+
+            // Discover columns
+            $columns = $automation->discover_columns($project_id);
+            $bug_count = 0;
+            $bug_cards = [];
+
+            foreach ($columns as $col_id => $column) {
+                $column_type = $this->get_column_type($column['title']);
+
+                if ($column_type === 'bugs') {
+                    $account_id = get_option('basecamp_account_id', '');
+                    if (!$account_id) {
+                        $account_id = $this->api->get_account_id();
+                    }
+
+                    $cards_response = $this->api->get("/{$account_id}/buckets/{$project_id}/card_tables/lists/{$col_id}/cards.json");
+                    $cards = ($cards_response['code'] === 200) ? $cards_response['data'] : [];
+
+                    if (!empty($cards)) {
+                        $bug_count += count($cards);
+                        $bug_cards = array_merge($bug_cards, $cards);
+
+                        WP_CLI::line("📌 Column: {$column['title']}");
+                        WP_CLI::line("   Found: " . count($cards) . " bugs");
+
+                        if ($detailed) {
+                            foreach ($cards as $card) {
+                                WP_CLI::line("   - [{$card['id']}] {$card['title']}");
+                                if (!empty($card['due_on'])) {
+                                    $due = new DateTime($card['due_on']);
+                                    $now = new DateTime();
+                                    if ($due < $now) {
+                                        WP_CLI::line("     ⚠️ OVERDUE: " . $card['due_on']);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            WP_CLI::line('');
+            if ($bug_count === 0) {
+                WP_CLI::success("✅ No bugs found in this project!");
+            } else {
+                $urgency = $bug_count > 10 ? '🚨🚨' : ($bug_count > 5 ? '🚨' : '⚠️');
+                WP_CLI::line("{$urgency} Total bugs: {$bug_count}");
+
+                if (!$detailed) {
+                    WP_CLI::line("💡 Use --detailed to see individual bugs");
+                }
+            }
+
+            return;
+        }
+
+        // All projects mode (with --all flag)
+        WP_CLI::warning('⚠️ Scanning ALL projects - this may take a while...');
         WP_CLI::line('');
 
         $pro = new Basecamp_Pro();
-        $automation = new Basecamp_Automation();
         $projects = $pro->fetch_all_projects();
 
         $bug_summary = [];
@@ -2672,7 +2803,12 @@ class BCR_CLI_Commands_Extended {
                 $column_type = $this->get_column_type($column['title']);
 
                 if ($column_type === 'bugs') {
-                    $cards = $automation->api_request("/{$automation->config['account_id']}/buckets/{$project['id']}/card_tables/lists/{$col_id}/cards.json");
+                    $account_id = get_option('basecamp_account_id', '');
+                    if (!$account_id) {
+                        $account_id = $this->api->get_account_id();
+                    }
+                    $cards_response = $this->api->get("/{$account_id}/buckets/{$project['id']}/card_tables/lists/{$col_id}/cards.json");
+                    $cards = ($cards_response['code'] === 200) ? $cards_response['data'] : [];
                     $bug_count = is_array($cards) ? count($cards) : 0;
                     $project_bugs += $bug_count;
                 }
@@ -2811,6 +2947,8 @@ class BCR_CLI_Commands_Extended {
             return;
         }
     }
+
+
 }
 
 // Register CLI commands if WP-CLI is available
