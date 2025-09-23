@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: Basecamp Cards Reader
- * Description: Read and manage Basecamp cards and todos directly from WordPress with OAuth 2.0 authentication. Enhanced with notes/content reading support.
- * Version: 1.2.0
+ * Plugin Name: Basecamp Pro Automation Suite
+ * Description: Professional Basecamp automation system with local indexing, intelligent search, and comprehensive project management capabilities.
+ * Version: 5.0.0
  * Author: Wbcom Designs
  * Author URI: https://wbcomdesigns.com
  * License: GPL v2 or later
@@ -35,13 +35,24 @@ class Basecamp_Cards_Reader_Clean {
         add_action('wp_ajax_bcr_read_card', [$this, 'handle_read_card']);
         add_action('wp_ajax_bcr_post_comment', [$this, 'handle_post_comment']);
 
-        // Load CLI commands
-        $this->load_cli_commands();
+        // Load API and CLI commands
+        $this->load_dependencies();
     }
     
-    private function load_cli_commands() {
+    private function load_dependencies() {
+        // Load core classes
+        require_once plugin_dir_path(__FILE__) . 'includes/class-basecamp-api.php';
+        require_once plugin_dir_path(__FILE__) . 'includes/class-basecamp-logger.php';
+
+        // Load CLI commands and professional automation suite
         if (defined('WP_CLI') && WP_CLI) {
-            require_once plugin_dir_path(__FILE__) . 'includes/class-bcr-cli-commands.php';
+            // Professional automation classes
+            require_once plugin_dir_path(__FILE__) . 'includes/class-basecamp-automation.php';
+            require_once plugin_dir_path(__FILE__) . 'includes/class-basecamp-pro.php';
+            require_once plugin_dir_path(__FILE__) . 'includes/class-basecamp-indexer.php';
+
+            // Unified CLI command system
+            require_once plugin_dir_path(__FILE__) . 'includes/class-bcr-cli-commands-extended.php';
         }
     }
     
@@ -550,11 +561,11 @@ class Basecamp_Cards_Reader_Clean {
     
     private function get_oauth_url() {
         $opt = get_option(self::OPT, []);
-        return 'https://launchpad.37signals.com/authorization/new?' . http_build_query([
-            'type' => 'web_server',
-            'client_id' => $opt['client_id'],
-            'redirect_uri' => admin_url('options-general.php?page=basecamp-reader'),
-        ]);
+        // Use the new API class to get OAuth URL with all scopes
+        return Basecamp_API::get_oauth_url(
+            $opt['client_id'],
+            admin_url('options-general.php?page=basecamp-reader')
+        );
     }
     
     private function handle_oauth_callback($code) {
